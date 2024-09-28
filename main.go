@@ -1,11 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"time"
 
 	"PayHandler/salebot"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt"
+	"github.com/joho/godotenv"
 )
 
 type PostBack struct { //crypto cloud
@@ -19,9 +24,25 @@ type PostBack struct { //crypto cloud
 
 const successStatus = "success"
 
+func init() {
+	f, err := os.OpenFile("server.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	log.SetOutput(f)
+
+	err = godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+}
+
 func main() {
 	r := gin.Default()
-	r.POST("/postback", Test)
+	r.POST("/postback", PostBackHandler)
 	err := r.Run()
 	if err != nil {
 		return
@@ -29,7 +50,7 @@ func main() {
 
 }
 
-func Test(c *gin.Context) {
+func PostBackHandler(c *gin.Context) {
 	var post PostBack
 
 	if err := c.ShouldBind(&post); err != nil {
@@ -38,64 +59,66 @@ func Test(c *gin.Context) {
 
 	log.Println(post.Token)
 
-	//res := VerifyToken(post.Token)
+	ok, err := VerifyToken(post.Token)
 
-	//if !res {
-	//	c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid token"})
-	//	return
-	//}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-	if post.Status != successStatus {
-		c.JSON(http.StatusBadRequest, gin.H{"error": post.Status})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid token"})
+		return
 	}
 
 	log.Println("Прошла провеврка статуса")
 
 	if post.Status == successStatus {
-		log.Println("Статус успешный")
-		log.Println("Начало выполнения запроса в салебот")
 		errChan := make(chan error, 1)
-		log.Println("Канал создан")
 		salebot.SaleAsync(errChan, post.OrderID)
 
-		log.Println("SaleAsync выполнена")
 		err := <-errChan
-		log.Println("Ошибка из канала записана в переменную err")
-
-		log.Println("Окончание выполнения запроса в салебот")
 
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
+		return
 	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Неизвестный статус"})
+
 }
 
-//func VerifyToken(tokenStr string) bool {
-//	secretKey := []byte("gZashj4XJJJRrisI33QgDkMARZVTMPkkvooI")
-//
-//	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
-//
-//		_, ok := token.Method.(*jwt.SigningMethodHMAC)
-//
-//		if !ok {
-//			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-//		}
-//
-//		return secretKey, nil
-//	})
-//
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//
-//	claims, ok := token.Claims.(jwt.MapClaims)
-//
-//	if ok && token.Valid {
-//		return claims.VerifyExpiresAt(time.Now().Unix(), true)
-//
-//	}
-//
-//	return false
-//}
+func VerifyToken(tokenStr string) (bool, error) {
+	secretKey := []byte(os.Getenv("CRYPTO_CLOUD_SECRET"))
+	log.Println("Ключ")
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+
+		_, ok := token.Method.(*jwt.SigningMethodHMAC)
+
+		if !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		log.Println("Ключ2")
+		return secretKey, nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	log.Println("Ключ4")
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+
+	if ok && token.Valid {
+		log.Println("Ключ5")
+		return claims.VerifyExpiresAt(time.Now().Unix(), true), nil
+
+	}
+	log.Println("Ключ6")
+
+	return false, nil
+}
